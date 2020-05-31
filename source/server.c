@@ -41,6 +41,13 @@ void *response(void *arg);
 void parseHeader(char *header, struct Header *hd);
 
 /**
+* file의 데이터를 가져온다
+*
+* @param filename : 파일명
+*/
+char *getFileData(char *filename);
+
+/**
 * stderr에 eroor message를 출력하고 프로그램을 종료한다.
 *
 * @param message : error message
@@ -151,6 +158,7 @@ void *response(void *nsd)
     struct Header hd;
     // num of client
     int sd = *(int *)nsd;
+    char rst[6000];
 
     char header[MAXHTTPHEADSIZE];
     int str_len; // length of request
@@ -166,7 +174,13 @@ void *response(void *nsd)
     // message 끝 표시
     header[str_len] = 0;
     // stdout에 message 출력
-    send(sd, header, strlen(header), 0);
+    // send(sd, header, strlen(header), 0);
+
+    char *data = getFileData("html/index.html");
+    sprintf(rst,"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n %s", data);
+    send(sd, rst, strlen(rst),0);
+    free(data);
+
     parseHeader(header, &hd);
 
     // close client descriptor
@@ -180,6 +194,27 @@ void parseHeader(char *header, struct Header *hd)
     char temp[10];
     sscanf(header, "%s %s %s %s %s", hd->type, hd->path, hd->version, temp, hd->host);
     fputs(hd->host, stdout);
+}
+
+char *getFileData(char *filename)
+{
+    struct stat buf;
+    FILE *rfp;
+    int size;
+    char *data;
+
+    stat(filename, &buf);
+
+    if ((rfp = fopen(filename, "r")) == NULL){
+        perror("fopen");
+        exit(1);
+    }
+
+    size = (int)buf.st_size + 1;
+    data = (char *)malloc(size * sizeof(char));
+    fread(data, size-1, size-1,rfp);
+    data[size]='\0';
+    return data;
 }
 
 void error_handling(char *message)
