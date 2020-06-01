@@ -134,6 +134,7 @@ int main(int argc, char **argv)
     pthread_t chat_thread[CLISIZE];
     void *thread_result;
     int optvalue = 1;
+    pthread_t tid;
 
     // port, service dir 초기화
     init(argc, argv);
@@ -194,17 +195,13 @@ int main(int argc, char **argv)
             exit(1);
         }
 
+        //response((void*)nsd);
+
         // create chat thread
-        pthread_create(&chat_thread[0], NULL, response, (void *)nsd);
-        clientCnt++;
+        pthread_create(&tid, NULL, response, (void *)nsd);
+        pthread_detach(tid);
     }
     // while  loop : e
-
-    // wait all response thread
-    for (i = 0; i < clientCnt; i++)
-    {
-        pthread_join(chat_thread[i], &thread_result);
-    }
 
     // close sd
     close(sock);
@@ -249,8 +246,8 @@ void init(int argc, char **argv)
 
 void *response(void *nsd)
 {
-   // mutex lock
-    pthread_mutex_lock(&m_lock);
+    // mutex lock
+    //pthread_mutex_lock(&m_lock);
 
     struct Header hd;
     // num of client
@@ -263,7 +260,7 @@ void *response(void *nsd)
     // Http Request 수신
     str_len = recv(sd, header, MAXHTTPHEADSIZE - 1, 0);
     header[str_len] = 0; // header 끝 표시
- 
+
     // header 파싱
     parseHeader(header, &hd);
 
@@ -276,8 +273,8 @@ void *response(void *nsd)
     close(sd);
     // free
     free(nsd);
-     // mutex unlock
-    pthread_mutex_unlock(&m_lock);
+    // mutex unlock
+    //pthread_mutex_unlock(&m_lock);
 }
 
 void parseGetRequest(char *path, GetRequest *req)
@@ -402,8 +399,6 @@ long long getSum(char *parm)
 
 void writeLog(char *ip, char *path, int len)
 {
-    
     sprintf(logdata, "%s %s %d\n", "1.1.1.1", path, len);
     write(logfile, logdata, strlen(logdata));
-   
 }
