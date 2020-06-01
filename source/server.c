@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 #define CLISIZE 3
 #define MAXHTTPHEADSIZE 4096
@@ -20,12 +21,48 @@ struct Header
     char type[10], path[256], version[20], host[100];
 };
 
+typedef struct getRequest
+{
+    char path[256], parameters[256];
+} GetRequest;
+
 // mutex
 pthread_mutex_t m_lock;
 
+char *MIME[5][2] = {
+    {".html", "text/html"},
+    {".htm", "text/html"},
+    {".gif", "image/gif"},
+    {".jpg", "image/jpeg"},
+    {".gif", "image/gif"}};
+
+/**
+* 파일 이름에 맞는 MIME를 리턴한다
+*
+* @param name : file name
+*/
+char *getMIME(char *name);
+
+/**
+* Get 요청을 파싱하여 경로와 파라미터를 저장하는 GetRequest 구조체를 초기화한다
+*
+* @param path : 파일 경로
+*/
+void parseGetRequest(char *path, GetRequest *req);
+
+/**
+* 프로그램이 Usage에 맞게 실행되었는지 확인한다
+* 정상적으로 실행되었으면 port와 service direcotry를 설정하고 안내문을 출력한다
+* 비정상적으로 실행되었으면 usage를 출력하고 종료한다
+*
+* @param argc : 명령행 인자의 개수
+* @param argv : 명령행 인자
+*/
+void init(int argc, char **argv);
+
 /**
 * http request를 받으면 요청에 대한
-* html을 리턴하는 쓰레드
+* 응답을 리턴하는 쓰레드
 *
 * @param arg : client number
 */
@@ -41,11 +78,20 @@ void *response(void *arg);
 void parseHeader(char *header, struct Header *hd);
 
 /**
-* file의 데이터를 가져온다
+* filename에 로직을 처리한다
 *
 * @param filename : 파일명
+* @param sd : client socket descriptor
 */
-char *getFileData(char *filename);
+void handleFileRequest(char *filename, int sd);
+
+/**
+* sd 에 파일의 data를 보낸다
+*
+* @param filename : 파일명
+* @param sd : client socket descriptor
+*/
+int sendFileData(char *filename, int sd);
 
 /**
 * stderr에 eroor message를 출력하고 프로그램을 종료한다.
@@ -54,14 +100,32 @@ char *getFileData(char *filename);
 */
 void error_handling(char *message);
 
+/**
+* total.cgi의 파라메터를 이용해 사이의 합을 리턴한다
+*
+* @param parm : total.cgi의 파라메터
+*/
+long long getSum(char *parm);
+
+/**
+* 로그를 작성한다
+*
+* @param path : 전송한 파일명
+* @param len : 전송한 크기
+*/
+void writeLog(char *ip, char *path, int len);
+
 // count of client
 int clientCnt = 0;
 
+int port;      // server port
+char dir[255]; // service directory
+int dirlen;    // len of dir
+int logfile;
+char logdata[200];
+
 int main(int argc, char **argv)
 {
-    int port;      // server port
-    char dir[255]; // service directory
-
     int i;                       // loop variable
     int sock;                    // server socket descriptor
     int *nsd;                    // new client socket descriptor
@@ -71,21 +135,15 @@ int main(int argc, char **argv)
     void *thread_result;
     int optvalue = 1;
 
-    // service directory와 port argument로 전달되지 않은 경우
-    if (argc != 3)
-    {
-        // print 사용법
-        printf("Usage : %s <service directory> <port>\n", argv[0]);
-        exit(1); // 프로그램 종료
-    }
-    strcpy(dir, argv[1]);
-    port = atoi(argv[2]);
+    // port, service dir 초기화
+    init(argc, argv);
 
-    // 프로그램 안내문 출력
-    printf("================================\n");
-    printf("Simple_Web_Server\n");
-    printf("    Service directory : %s\n    port : %d\n", dir, port);
-    printf("================================\n\n");
+    logfile = open("log.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (logfile == -1)
+    {
+        perror("Open");
+        exit(1);
+    }
 
     // init mutex
     if (pthread_mutex_init(&m_lock, NULL) != 0)
@@ -117,7 +175,7 @@ int main(int argc, char **argv)
     }
 
     // listen
-    if (listen(sock, 5))
+    if (listen(sock, 100))
     {
         perror("listen");
         exit(1);
@@ -125,7 +183,7 @@ int main(int argc, char **argv)
 
     // multi client의 접속을 처리하기 위한 while loop
     // while loop : s
-    while (clientCnt < CLISIZE)
+    while (1)
     {
         nsd = (int *)malloc(sizeof(int));
         // accept client
@@ -137,7 +195,7 @@ int main(int argc, char **argv)
         }
 
         // create chat thread
-        pthread_create(&chat_thread[clientCnt], NULL, response, (void *)nsd);
+        pthread_create(&chat_thread[0], NULL, response, (void *)nsd);
         clientCnt++;
     }
     // while  loop : e
@@ -150,71 +208,174 @@ int main(int argc, char **argv)
 
     // close sd
     close(sock);
+    close(logfile);
+
     return 0;
+}
+
+char *getMIME(char *name)
+{
+    int i;
+    for (i = 0; i < 5; i++)
+    {
+        if (strstr(name, MIME[i][0]))
+        {
+            return MIME[i][1];
+        }
+    }
+
+    return NULL;
+}
+
+void init(int argc, char **argv)
+{
+    // service directory와 port argument로 전달되지 않은 경우
+    if (argc != 3)
+    {
+        // print 사용법
+        printf("Usage : %s <service directory> <port>\n", argv[0]);
+        exit(1); // 프로그램 종료
+    }
+    strcpy(dir, argv[1]);
+    dirlen = strlen(dir);
+    port = atoi(argv[2]);
+
+    // 프로그램 안내문 출력
+    printf("================================\n");
+    printf("Simple_Web_Server\n");
+    printf("    Service directory : %s\n    port : %d\n", dir, port);
+    printf("================================\n\n");
 }
 
 void *response(void *nsd)
 {
+   // mutex lock
+    pthread_mutex_lock(&m_lock);
+
     struct Header hd;
     // num of client
     int sd = *(int *)nsd;
-    char rst[6000];
+    char path[255];
 
     char header[MAXHTTPHEADSIZE];
     int str_len; // length of request
 
-    // mutex lock
-    pthread_mutex_lock(&m_lock);
-    // mutex unlock
-    pthread_mutex_unlock(&m_lock);
-
-    // client로 부터 message 수신
+    // Http Request 수신
     str_len = recv(sd, header, MAXHTTPHEADSIZE - 1, 0);
-
-    // message 끝 표시
-    header[str_len] = 0;
-    // stdout에 message 출력
-    // send(sd, header, strlen(header), 0);
-
-    char *data = getFileData("html/index.html");
-    sprintf(rst,"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n %s", data);
-    send(sd, rst, strlen(rst),0);
-    free(data);
-
+    header[str_len] = 0; // header 끝 표시
+ 
+    // header 파싱
     parseHeader(header, &hd);
 
+    // 파일 경로 생성
+    strcpy(path, dir);
+    strcat(path, hd.path);
+
+    handleFileRequest(path, sd);
     // close client descriptor
     close(sd);
     // free
     free(nsd);
+     // mutex unlock
+    pthread_mutex_unlock(&m_lock);
+}
+
+void parseGetRequest(char *path, GetRequest *req)
+{
+    char *c = strstr(path, "?");
+    if (c == NULL) // 파라미터가 없으면
+    {
+        strcpy(req->path, path);
+        req->parameters[0] = '\0';
+    }
+    else // 파라미터가 있으면
+    {
+        // 분리해서 저장
+        strncpy(req->path, path, c - path);
+        strcpy(req->parameters, c + 1);
+    }
 }
 
 void parseHeader(char *header, struct Header *hd)
 {
     char temp[10];
     sscanf(header, "%s %s %s %s %s", hd->type, hd->path, hd->version, temp, hd->host);
-    fputs(hd->host, stdout);
 }
 
-char *getFileData(char *filename)
+void handleFileRequest(char *path, int sd)
 {
-    struct stat buf;
-    FILE *rfp;
-    int size;
-    char *data;
+    struct stat buf; // 파일정보
+    int sended = 0;
+    GetRequest req;
+    parseGetRequest(path, &req);
+    char rst[100];
 
+    if (strstr(req.path, "total.cgi") != NULL)
+    {
+        sprintf(rst, "HTTP/1.1 200 OK\r\nContent-Type: text/plain \r\n\r\n%lld", getSum(req.parameters));
+        sended += write(sd, rst, strlen(rst));
+        writeLog("", path, sended);
+        return;
+    }
+
+    if (access(req.path, F_OK) != 0) // 존재하지 않으면
+    {
+        // index.html로 설정
+        strcpy(req.path, dir);
+        strcat(req.path, "/index.html");
+    }
+
+    // 파일이 존재하면
+    if (access(req.path, F_OK) == 0)
+    {
+        stat(req.path, &buf);
+        if (S_ISDIR(buf.st_mode))
+        {
+            // index.html로 설정
+            strcpy(req.path, dir);
+            strcat(req.path, "/index.html");
+        }
+
+        // Http Response header 생성
+        sprintf(rst, "HTTP/1.1 200 OK\r\nContent-Type: %s \r\n\r\n", getMIME(req.path));
+        // Http Response header 송신
+        sended += write(sd, rst, strlen(rst));
+        //send(sd, rst, strlen(rst), 0);
+        // Http Response body 송신
+        sended += sendFileData(req.path, sd);
+        writeLog("", req.path, sended);
+    }
+    else
+    { // index.html도 존재 하지 않으면
+        sprintf(rst, "HTTP/1.1 200 OK\r\nContent-Type: %s \r\n\r\n <html><body>Not found</body></html>", getMIME(req.path));
+        sended += send(sd, rst, strlen(rst), 0);
+        writeLog("", req.path, sended);
+    }
+}
+
+int sendFileData(char *filename, int sd)
+{
+    struct stat buf; // 파일 정보
+    int rfd, size, n, sended = 0;
+    char *data;
     stat(filename, &buf);
 
-    if ((rfp = fopen(filename, "r")) == NULL){
-        perror("fopen");
+    rfd = open(filename, O_RDONLY);
+    if (rfd == -1)
+    {
+        perror("Open");
         exit(1);
     }
 
-    size = (int)buf.st_size + 1;
+    size = (int)buf.st_size;
     data = (char *)malloc(size * sizeof(char));
-    fread(data, size-1, size-1,rfp);
-    data[size]='\0';
-    return data;
+    while ((n = read(rfd, data, size)) > 0)
+    {
+        sended += write(sd, data, n);
+    }
+    close(rfd);
+    free(data);
+    return sended;
 }
 
 void error_handling(char *message)
@@ -224,4 +385,25 @@ void error_handling(char *message)
     fputc('\n', stderr);
     // exit
     exit(1);
+}
+
+/**
+* total.cgi의 파라메터를 이용해 사이의 합을 리턴한다
+*
+* @param parm : total.cgi의 파라메터
+*/
+long long getSum(char *parm)
+{
+    long long l, r, temp;
+    sscanf(parm, "from=%lld&to=%lld", &l, &r);
+
+    return ((r * (r + 1)) / 2) - (((l - 1) * l) / 2);
+}
+
+void writeLog(char *ip, char *path, int len)
+{
+    
+    sprintf(logdata, "%s %s %d\n", "1.1.1.1", path, len);
+    write(logfile, logdata, strlen(logdata));
+   
 }
