@@ -2,7 +2,7 @@ CC= gcc
 APP=server
 CFLAGS = -D_REENTRANT 
 LDFLAGS = -lpthread 
-OBJS=server.o
+OBJS=$(APP).o
 
 all: $(APP)
 

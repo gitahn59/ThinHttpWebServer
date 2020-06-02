@@ -9,9 +9,11 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <signal.h>
 
 #define CLISIZE 3
 #define MAXHTTPHEADSIZE 4096
+#define MAXCLIENTSIZE 50
 
 /**
 * Http Requeest Header 구조체
@@ -131,10 +133,10 @@ int main(int argc, char **argv)
     int *nsd;                    // new client socket descriptor
     struct sockaddr_in sin, cli; // server and client socket
     int clientlen = sizeof(cli);
-    pthread_t chat_thread[CLISIZE];
-    void *thread_result;
     int optvalue = 1;
     pthread_t tid;
+
+    signal(SIGPIPE, SIG_IGN);
 
     // port, service dir 초기화
     init(argc, argv);
@@ -176,7 +178,7 @@ int main(int argc, char **argv)
     }
 
     // listen
-    if (listen(sock, 100))
+    if (listen(sock, MAXCLIENTSIZE))
     {
         perror("listen");
         exit(1);
@@ -198,7 +200,15 @@ int main(int argc, char **argv)
         //response((void*)nsd);
 
         // create chat thread
-        pthread_create(&tid, NULL, response, (void *)nsd);
+        while(1){
+            if(clientCnt<MAXCLIENTSIZE){
+                break;
+            }else sleep(10);
+        }
+        if(pthread_create(&tid, NULL, response, (void *)nsd) < 0){
+            perror("thread create error");
+            exit(1);
+        }
         pthread_detach(tid);
     }
     // while  loop : e
@@ -246,9 +256,6 @@ void init(int argc, char **argv)
 
 void *response(void *nsd)
 {
-    // mutex lock
-    //pthread_mutex_lock(&m_lock);
-
     struct Header hd;
     // num of client
     int sd = *(int *)nsd;
@@ -256,6 +263,10 @@ void *response(void *nsd)
 
     char header[MAXHTTPHEADSIZE];
     int str_len; // length of request
+
+    pthread_mutex_lock(&m_lock); // mutex lock
+    clientCnt++;
+    pthread_mutex_unlock(&m_lock); // mutex unlock
 
     // Http Request 수신
     str_len = recv(sd, header, MAXHTTPHEADSIZE - 1, 0);
@@ -273,8 +284,10 @@ void *response(void *nsd)
     close(sd);
     // free
     free(nsd);
-    // mutex unlock
-    //pthread_mutex_unlock(&m_lock);
+
+    pthread_mutex_lock(&m_lock); // mutex lock
+    clientCnt--;
+    pthread_mutex_unlock(&m_lock); // mutex unlock
 }
 
 void parseGetRequest(char *path, GetRequest *req)
@@ -354,7 +367,7 @@ int sendFileData(char *filename, int sd)
 {
     struct stat buf; // 파일 정보
     int rfd, size, n, sended = 0;
-    char *data;
+    char data[BUFSIZ];
     stat(filename, &buf);
 
     rfd = open(filename, O_RDONLY);
@@ -365,13 +378,17 @@ int sendFileData(char *filename, int sd)
     }
 
     size = (int)buf.st_size;
-    data = (char *)malloc(size * sizeof(char));
-    while ((n = read(rfd, data, size)) > 0)
+    //data = (char *)malloc(size * sizeof(char));
+    while ((n = read(rfd, data, BUFSIZ)) > 0)
     {
         sended += write(sd, data, n);
     }
+    if(n==-1){
+        perror("Read");
+        exit(1);
+    }
     close(rfd);
-    free(data);
+    //free(data);
     return sended;
 }
 
@@ -399,6 +416,8 @@ long long getSum(char *parm)
 
 void writeLog(char *ip, char *path, int len)
 {
+    pthread_mutex_lock(&m_lock); // mutex lock
     sprintf(logdata, "%s %s %d\n", "1.1.1.1", path, len);
     write(logfile, logdata, strlen(logdata));
+    pthread_mutex_unlock(&m_lock); // mutex unlock
 }
