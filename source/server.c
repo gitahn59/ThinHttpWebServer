@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/wait.h>
 
 #define CLISIZE 3
 #define MAXHTTPHEADSIZE 4096
@@ -25,9 +26,6 @@ typedef struct getRequest
 {
     char path[256], parameters[256];
 } GetRequest;
-
-// mutex
-pthread_mutex_t m_lock;
 
 char *MIME[5][2] = {
     {".html", "text/html"},
@@ -135,23 +133,18 @@ int main(int argc, char **argv)
     void *thread_result;
     int optvalue = 1;
     pthread_t tid;
+    int pid, wfd;
 
     // port, service dir 초기화
     init(argc, argv);
 
-    logfile = open("log.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (logfile == -1)
+    wfd = open("log.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (wfd == -1)
     {
         perror("Open");
         exit(1);
     }
-
-    // init mutex
-    if (pthread_mutex_init(&m_lock, NULL) != 0)
-    {
-        perror("Mutex Init failure");
-        return 1;
-    }
+    close(wfd);
 
     // tcp socket 생성
     sock = socket(PF_INET, SOCK_STREAM, 0);
@@ -195,11 +188,33 @@ int main(int argc, char **argv)
             exit(1);
         }
 
+        pid = fork();
+        if (pid < 0)
+        {
+            perror("fork");
+            exit(1);
+        }
+        else
+        {
+            if (pid == 0)
+            {
+                close(sock);
+                response((void *)nsd);
+                exit(0);
+            }
+            else
+            {
+                close(*nsd);
+                free(nsd);
+                wait(NULL);
+            }
+        }
+
         //response((void*)nsd);
 
         // create chat thread
-        pthread_create(&tid, NULL, response, (void *)nsd);
-        pthread_detach(tid);
+        //pthread_create(&tid, NULL, response, (void *)nsd);
+        //pthread_detach(tid);
     }
     // while  loop : e
 
@@ -399,6 +414,9 @@ long long getSum(char *parm)
 
 void writeLog(char *ip, char *path, int len)
 {
+    char logdata[300];
+    int wfd = open("log.txt", O_WRONLY | O_APPEND, 0644);
     sprintf(logdata, "%s %s %d\n", "1.1.1.1", path, len);
-    write(logfile, logdata, strlen(logdata));
+    write(wfd, logdata, strlen(logdata));
+    close(wfd);
 }
