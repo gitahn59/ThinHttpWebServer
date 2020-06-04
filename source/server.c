@@ -69,6 +69,15 @@ void parseGetRequest(char *path, GetRequest *req);
 void init(int argc, char **argv);
 
 /**
+* 다수의 client가 접속하기를 계속 기다리며
+* client가 접속하면
+* response thread를 생성하는 쓰레드
+*
+* @param sd : server socket 
+*/
+void* accept_thread(void *sd);
+
+/**
 * http request를 받으면 요청에 대한
 * 응답을 리턴하는 쓰레드
 *
@@ -89,7 +98,7 @@ void parseHeader(char *header, struct Header *hd);
 * filename에 로직을 처리한다
 *
 * @param filename : 파일명
-* @param sd : client socket descriptor
+* @param c : Client info
 */
 void handleFileRequest(char *filename, Client c);
 
@@ -134,13 +143,13 @@ char logdata[200];
 
 int main(int argc, char **argv)
 {
-    int i;                       // loop variable
-    int sock;                    // server socket descriptor
-    Client *c;                   // new client socket descriptor
-    struct sockaddr_in sin, cli; // server and client socket
-    int clientlen = sizeof(cli);
+    int i;    // loop variable
+    int sock; // server socket descriptor
+
+    struct sockaddr_in sin; // server and client socket
     int optvalue = 1;
     pthread_t tid;
+    char str[BUFSIZ];
 
     signal(SIGPIPE, SIG_IGN);
 
@@ -190,38 +199,24 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    // multi client의 접속을 처리하기 위한 while loop
-    // while loop : s
+    if (pthread_create(&tid, NULL, accept_thread, (void *)&sock) < 0)
+    {
+        perror("thread create error");
+        exit(1);
+    }
+
     while (1)
     {
-        c = (Client *)malloc(sizeof(Client));
-        // accept client
-        c->sd = accept(sock, (struct sockaddr *)&cli, &clientlen);
-        if (c->sd == -1)
+        scanf("%s", str);
+        if (strcmp(str, "q") == 0) //종료 command가 들어오면
         {
-            perror("accept");
-            exit(1);
+            break;
         }
-
-        c->ip = inet_ntoa(cli.sin_addr);
-        // create chat thread
-        while (1)
-        {
-            if (clientCnt < MAXCLIENTSIZE)
-            {
-                break;
-            }
-            else
-                sleep(10);
-        }
-        if (pthread_create(&tid, NULL, response, (void *)c) < 0)
-        {
-            perror("thread create error");
-            exit(1);
-        }
-        pthread_detach(tid);
     }
-    // while  loop : e
+
+    // accept thread를 종료
+    pthread_cancel(tid);
+    pthread_join(tid, NULL);
 
     // close sd
     close(sock);
@@ -261,7 +256,49 @@ void init(int argc, char **argv)
     printf("================================\n");
     printf("Simple_Web_Server\n");
     printf("    Service directory : %s\n    port : %d\n", dir, port);
+    printf("Exit : enter q \n");
     printf("================================\n\n");
+}
+
+void* accept_thread(void *sd)
+{
+    struct sockaddr_in cli; // server and client socket
+    int clientlen = sizeof(cli);
+    Client *c; // new client socket descriptor
+    pthread_t tid;
+
+    // multi client의 접속을 처리하기 위한 while loop
+    // while loop : s
+    while (1)
+    {
+        c = (Client *)malloc(sizeof(Client));
+        // accept client
+        c->sd = accept(*(int *)sd, (struct sockaddr *)&cli, &clientlen);
+        if (c->sd == -1)
+        {
+            perror("accept");
+            exit(1);
+        }
+
+        c->ip = inet_ntoa(cli.sin_addr);
+        // create chat thread
+        while (1)
+        {
+            if (clientCnt < MAXCLIENTSIZE)
+            {
+                break;
+            }
+            else
+                sleep(10);
+        }
+        if (pthread_create(&tid, NULL, response, (void *)c) < 0)
+        {
+            perror("thread create error");
+            exit(1);
+        }
+        pthread_detach(tid);
+    }
+    // while  loop : e
 }
 
 void *response(void *nsd)
