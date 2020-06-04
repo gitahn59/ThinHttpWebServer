@@ -140,6 +140,8 @@ char dir[255]; // service directory
 int dirlen;    // len of dir
 int logfile;
 char logdata[200];
+const char* NOTFOUND = "HTTP/1.1 200 OK\r\nContent-Type: text/html \r\n\r\n <html><body>Not found</body></html>";
+int NOTFOUNDLEN = 82;
 
 int main(int argc, char **argv)
 {
@@ -413,8 +415,7 @@ void handleFileRequest(char *path, Client c)
     }
     else
     { // index.html도 존재 하지 않으면
-        sprintf(rst, "HTTP/1.1 200 OK\r\nContent-Type: %s \r\n\r\n <html><body>Not found</body></html>", "text/html");
-        sended += send(c.sd, rst, strlen(rst), 0);
+        sended += send(c.sd, NOTFOUND, NOTFOUNDLEN, 0);
         writeLog(c.ip, path, sended);
     }
 }
