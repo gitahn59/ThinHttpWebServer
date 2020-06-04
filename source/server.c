@@ -23,6 +23,12 @@ struct Header
     char type[10], path[256], version[20], host[100];
 };
 
+typedef struct myClient
+{
+    int sd;
+    char *ip;
+} Client;
+
 typedef struct getRequest
 {
     char path[256], parameters[256];
@@ -85,7 +91,7 @@ void parseHeader(char *header, struct Header *hd);
 * @param filename : 파일명
 * @param sd : client socket descriptor
 */
-void handleFileRequest(char *filename, int sd);
+void handleFileRequest(char *filename, Client c);
 
 /**
 * sd 에 파일의 data를 보낸다
@@ -130,7 +136,7 @@ int main(int argc, char **argv)
 {
     int i;                       // loop variable
     int sock;                    // server socket descriptor
-    int *nsd;                    // new client socket descriptor
+    Client *c;                   // new client socket descriptor
     struct sockaddr_in sin, cli; // server and client socket
     int clientlen = sizeof(cli);
     int optvalue = 1;
@@ -188,24 +194,28 @@ int main(int argc, char **argv)
     // while loop : s
     while (1)
     {
-        nsd = (int *)malloc(sizeof(int));
+        c = (Client *)malloc(sizeof(Client));
         // accept client
-        *nsd = accept(sock, (struct sockaddr *)&cli, &clientlen);
-        if (*nsd == -1)
+        c->sd = accept(sock, (struct sockaddr *)&cli, &clientlen);
+        if (c->sd == -1)
         {
             perror("accept");
             exit(1);
         }
 
-        //response((void*)nsd);
-
+        c->ip = inet_ntoa(cli.sin_addr);
         // create chat thread
-        while(1){
-            if(clientCnt<MAXCLIENTSIZE){
+        while (1)
+        {
+            if (clientCnt < MAXCLIENTSIZE)
+            {
                 break;
-            }else sleep(10);
+            }
+            else
+                sleep(10);
         }
-        if(pthread_create(&tid, NULL, response, (void *)nsd) < 0){
+        if (pthread_create(&tid, NULL, response, (void *)c) < 0)
+        {
             perror("thread create error");
             exit(1);
         }
@@ -258,7 +268,7 @@ void *response(void *nsd)
 {
     struct Header hd;
     // num of client
-    int sd = *(int *)nsd;
+    Client c = *(Client *)nsd;
     char path[255];
 
     char header[MAXHTTPHEADSIZE];
@@ -269,7 +279,7 @@ void *response(void *nsd)
     pthread_mutex_unlock(&m_lock); // mutex unlock
 
     // Http Request 수신
-    str_len = recv(sd, header, MAXHTTPHEADSIZE - 1, 0);
+    str_len = recv(c.sd, header, MAXHTTPHEADSIZE - 1, 0);
     header[str_len] = 0; // header 끝 표시
 
     // header 파싱
@@ -279,9 +289,9 @@ void *response(void *nsd)
     strcpy(path, dir);
     strcat(path, hd.path);
 
-    handleFileRequest(path, sd);
+    handleFileRequest(path, c);
     // close client descriptor
-    close(sd);
+    close(c.sd);
     // free
     free(nsd);
 
@@ -312,54 +322,63 @@ void parseHeader(char *header, struct Header *hd)
     sscanf(header, "%s %s %s %s %s", hd->type, hd->path, hd->version, temp, hd->host);
 }
 
-void handleFileRequest(char *path, int sd)
+void handleFileRequest(char *path, Client c)
 {
     struct stat buf; // 파일정보
     int sended = 0;
     GetRequest req;
-    parseGetRequest(path, &req);
+    parseGetRequest(path, &req); // 경로를 파일경로와 parameter로 분리
     char rst[100];
+    int idx;
 
+    // total.cgi 인 경우
     if (strstr(req.path, "total.cgi") != NULL)
     {
         sprintf(rst, "HTTP/1.1 200 OK\r\nContent-Type: text/plain \r\n\r\n%lld", getSum(req.parameters));
-        sended += write(sd, rst, strlen(rst));
-        writeLog("", path, sended);
+        sended += write(c.sd, rst, strlen(rst));
+        writeLog(c.ip, path, sended);
         return;
     }
 
+    // 파일명 조정
     if (access(req.path, F_OK) != 0) // 존재하지 않으면
     {
-        // index.html로 설정
-        strcpy(req.path, dir);
-        strcat(req.path, "/index.html");
+        if (getMIME(req.path) == NULL)
+        { // 요청 경로가 디렉토리인 경우
+            // index.html로 설정
+            strcat(req.path, "/index.html");
+        }
+        else
+        { // 요청 경로가 파일인 경우
+            idx = strrchr(req.path, '/') - req.path;
+            strcpy(req.path + idx + 1, "index.html"); // 파일명 교체
+        }
+    }
+    else
+    { // 파일은 존재하지만 디렉토리인 경우
+        stat(req.path, &buf);
+        if (S_ISDIR(buf.st_mode))
+        {
+            strcat(req.path, "/index.html"); // index.html로 설정
+        }
     }
 
     // 파일이 존재하면
     if (access(req.path, F_OK) == 0)
     {
-        stat(req.path, &buf);
-        if (S_ISDIR(buf.st_mode))
-        {
-            // index.html로 설정
-            strcpy(req.path, dir);
-            strcat(req.path, "/index.html");
-        }
-
         // Http Response header 생성
         sprintf(rst, "HTTP/1.1 200 OK\r\nContent-Type: %s \r\n\r\n", getMIME(req.path));
         // Http Response header 송신
-        sended += write(sd, rst, strlen(rst));
-        //send(sd, rst, strlen(rst), 0);
+        sended += write(c.sd, rst, strlen(rst));
         // Http Response body 송신
-        sended += sendFileData(req.path, sd);
-        writeLog("", req.path, sended);
+        sended += sendFileData(req.path, c.sd);
+        writeLog(c.ip, req.path, sended);
     }
     else
     { // index.html도 존재 하지 않으면
-        sprintf(rst, "HTTP/1.1 200 OK\r\nContent-Type: %s \r\n\r\n <html><body>Not found</body></html>", getMIME(req.path));
-        sended += send(sd, rst, strlen(rst), 0);
-        writeLog("", req.path, sended);
+        sprintf(rst, "HTTP/1.1 200 OK\r\nContent-Type: %s \r\n\r\n <html><body>Not found</body></html>", "text/html");
+        sended += send(c.sd, rst, strlen(rst), 0);
+        writeLog(c.ip, path, sended);
     }
 }
 
@@ -378,17 +397,16 @@ int sendFileData(char *filename, int sd)
     }
 
     size = (int)buf.st_size;
-    //data = (char *)malloc(size * sizeof(char));
     while ((n = read(rfd, data, BUFSIZ)) > 0)
     {
         sended += write(sd, data, n);
     }
-    if(n==-1){
+    if (n == -1)
+    {
         perror("Read");
         exit(1);
     }
     close(rfd);
-    //free(data);
     return sended;
 }
 
@@ -417,7 +435,7 @@ long long getSum(char *parm)
 void writeLog(char *ip, char *path, int len)
 {
     pthread_mutex_lock(&m_lock); // mutex lock
-    sprintf(logdata, "%s %s %d\n", "1.1.1.1", path, len);
+    sprintf(logdata, "%s %s %d\n", ip, path, len);
     write(logfile, logdata, strlen(logdata));
     pthread_mutex_unlock(&m_lock); // mutex unlock
 }
