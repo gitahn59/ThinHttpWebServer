@@ -306,6 +306,7 @@ void* accept_thread(void *sd)
 void *response(void *nsd)
 {
     struct Header hd;
+    strcpy(hd.type,"NONE");
     // num of client
     Client c = *(Client *)nsd;
     char path[255];
@@ -313,30 +314,23 @@ void *response(void *nsd)
     char header[MAXHTTPHEADSIZE];
     int str_len; // length of request
 
-    pthread_mutex_lock(&m_lock); // mutex lock
-    clientCnt++;
-    pthread_mutex_unlock(&m_lock); // mutex unlock
-
     // Http Request 수신
     str_len = recv(c.sd, header, MAXHTTPHEADSIZE - 1, 0);
     header[str_len] = 0; // header 끝 표시
 
     // header 파싱
     parseHeader(header, &hd);
+    if(strcmp(hd.type, "GET")==0){
+        // 파일 경로 생성
+        strcpy(path, dir);
+        strcat(path, hd.path);
+        handleFileRequest(path, c);
+    }
 
-    // 파일 경로 생성
-    strcpy(path, dir);
-    strcat(path, hd.path);
-
-    handleFileRequest(path, c);
     // close client descriptor
     close(c.sd);
     // free
     free(nsd);
-
-    pthread_mutex_lock(&m_lock); // mutex lock
-    clientCnt--;
-    pthread_mutex_unlock(&m_lock); // mutex unlock
 }
 
 void parseGetRequest(char *path, GetRequest *req)
