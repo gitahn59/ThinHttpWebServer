@@ -3,60 +3,19 @@
 #include <unistd.h>
 #include <string.h>
 #include <arpa/inet.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <signal.h>
+#include "utility.h"
 
-#define CLISIZE 3
 #define MAXHTTPHEADSIZE 4096
 #define MAXCLIENTSIZE 50
 
-/**
-* Http Requeest Header 구조체
-*/
-struct Header
-{
-    char type[10], path[256], version[20], host[100];
-};
-
-typedef struct myClient
-{
-    int sd;
-    char *ip;
-} Client;
-
-typedef struct getRequest
-{
-    char path[256], parameters[256];
-} GetRequest;
-
 // mutex
 pthread_mutex_t m_lock;
-
-char *MIME[5][2] = {
-    {".html", "text/html"},
-    {".htm", "text/html"},
-    {".gif", "image/gif"},
-    {".jpg", "image/jpeg"},
-    {".gif", "image/gif"}};
-
-/**
-* 파일 이름에 맞는 MIME를 리턴한다
-*
-* @param name : file name
-*/
-char *getMIME(char *name);
-
-/**
-* Get 요청을 파싱하여 경로와 파라미터를 저장하는 GetRequest 구조체를 초기화한다
-*
-* @param path : 파일 경로
-*/
-void parseGetRequest(char *path, GetRequest *req);
 
 /**
 * 프로그램이 Usage에 맞게 실행되었는지 확인한다
@@ -83,16 +42,7 @@ void* accept_thread(void *sd);
 *
 * @param arg : client number
 */
-void *response(void *arg);
-
-/**
-* http request header 문자열로부터
-* Header 구조체를 생성한다
-*
-* @param header : http request header
-* @param hd : header
-*/
-void parseHeader(char *header, struct Header *hd);
+void *response_thread(void *arg);
 
 /**
 * filename에 로직을 처리한다
@@ -103,34 +53,11 @@ void parseHeader(char *header, struct Header *hd);
 void handleFileRequest(char *filename, Client c);
 
 /**
-* sd 에 파일의 data를 보낸다
-*
-* @param filename : 파일명
-* @param sd : client socket descriptor
-*/
-int sendFileData(char *filename, int sd);
-
-/**
 * stderr에 eroor message를 출력하고 프로그램을 종료한다.
 *
 * @param message : error message
 */
 void error_handling(char *message);
-
-/**
-* total.cgi의 파라메터를 이용해 사이의 합을 리턴한다
-*
-* @param parm : total.cgi의 파라메터
-*/
-long long getSum(char *parm);
-
-/**
-* 로그를 작성한다
-*
-* @param path : 전송한 파일명
-* @param len : 전송한 크기
-*/
-void writeLog(char *ip, char *path, int len);
 
 // count of client
 int clientCnt = 0;
@@ -138,8 +65,7 @@ int clientCnt = 0;
 int port;      // server port
 char dir[255]; // service directory
 int dirlen;    // len of dir
-int logfile;
-char logdata[200];
+int logfd; // log file descriptor
 const char* NOTFOUND = "HTTP/1.1 200 OK\r\nContent-Type: text/html \r\n\r\n <html><body>Not found</body></html>";
 int NOTFOUNDLEN = 82;
 
@@ -158,8 +84,8 @@ int main(int argc, char **argv)
     // port, service dir 초기화
     init(argc, argv);
 
-    logfile = open("log.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (logfile == -1)
+    logfd = open("log.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (logfd == -1)
     {
         perror("Open");
         exit(1);
@@ -222,23 +148,9 @@ int main(int argc, char **argv)
 
     // close sd
     close(sock);
-    close(logfile);
+    close(logfd);
 
     return 0;
-}
-
-char *getMIME(char *name)
-{
-    int i;
-    for (i = 0; i < 5; i++)
-    {
-        if (strstr(name, MIME[i][0]))
-        {
-            return MIME[i][1];
-        }
-    }
-
-    return NULL;
 }
 
 void init(int argc, char **argv)
@@ -253,6 +165,12 @@ void init(int argc, char **argv)
     strcpy(dir, argv[1]);
     dirlen = strlen(dir);
     port = atoi(argv[2]);
+    if(port==0){
+        // print 사용법
+        printf("Unvalid Port number\n");
+        printf("Usage : %s <service directory> <port>\n", argv[0]);
+        exit(1); // 프로그램 종료
+    }
 
     // 프로그램 안내문 출력
     printf("================================\n");
@@ -293,7 +211,7 @@ void* accept_thread(void *sd)
             else
                 sleep(10);
         }
-        if (pthread_create(&tid, NULL, response, (void *)c) < 0)
+        if (pthread_create(&tid, NULL, response_thread, (void *)c) < 0)
         {
             perror("thread create error");
             exit(1);
@@ -303,7 +221,7 @@ void* accept_thread(void *sd)
     // while  loop : e
 }
 
-void *response(void *nsd)
+void *response_thread(void *nsd)
 {
     struct Header hd;
     strcpy(hd.type,"NONE");
@@ -333,28 +251,6 @@ void *response(void *nsd)
     free(nsd);
 }
 
-void parseGetRequest(char *path, GetRequest *req)
-{
-    char *c = strstr(path, "?");
-    if (c == NULL) // 파라미터가 없으면
-    {
-        strcpy(req->path, path);
-        req->parameters[0] = '\0';
-    }
-    else // 파라미터가 있으면
-    {
-        // 분리해서 저장
-        strncpy(req->path, path, c - path);
-        strcpy(req->parameters, c + 1);
-    }
-}
-
-void parseHeader(char *header, struct Header *hd)
-{
-    char temp[10];
-    sscanf(header, "%s %s %s %s %s", hd->type, hd->path, hd->version, temp, hd->host);
-}
-
 void handleFileRequest(char *path, Client c)
 {
     struct stat buf; // 파일정보
@@ -368,8 +264,8 @@ void handleFileRequest(char *path, Client c)
     if (strstr(req.path, "total.cgi") != NULL)
     {
         sprintf(rst, "HTTP/1.1 200 OK\r\nContent-Type: text/plain \r\n\r\n%lld", getSum(req.parameters));
-        sended += write(c.sd, rst, strlen(rst));
-        writeLog(c.ip, path, sended);
+        sended += send(c.sd, rst, strlen(rst),0);
+        writeLog(logfd, c.ip, path, sended, &m_lock);
         return;
     }
 
@@ -402,44 +298,16 @@ void handleFileRequest(char *path, Client c)
         // Http Response header 생성
         sprintf(rst, "HTTP/1.1 200 OK\r\nContent-Type: %s \r\n\r\n", getMIME(req.path));
         // Http Response header 송신
-        sended += write(c.sd, rst, strlen(rst));
+        sended += send(c.sd, rst, strlen(rst),0);
         // Http Response body 송신
         sended += sendFileData(req.path, c.sd);
-        writeLog(c.ip, req.path, sended);
+        writeLog(logfd, c.ip, path, sended, &m_lock);
     }
     else
     { // index.html도 존재 하지 않으면
         sended += send(c.sd, NOTFOUND, NOTFOUNDLEN, 0);
-        writeLog(c.ip, path, sended);
+        writeLog(logfd, c.ip, path, sended, &m_lock);
     }
-}
-
-int sendFileData(char *filename, int sd)
-{
-    struct stat buf; // 파일 정보
-    int rfd, size, n, sended = 0;
-    char data[BUFSIZ];
-    stat(filename, &buf);
-
-    rfd = open(filename, O_RDONLY);
-    if (rfd == -1)
-    {
-        perror("Open");
-        exit(1);
-    }
-
-    size = (int)buf.st_size;
-    while ((n = read(rfd, data, BUFSIZ)) > 0)
-    {
-        sended += write(sd, data, n);
-    }
-    if (n == -1)
-    {
-        perror("Read");
-        exit(1);
-    }
-    close(rfd);
-    return sended;
 }
 
 void error_handling(char *message)
@@ -451,23 +319,3 @@ void error_handling(char *message)
     exit(1);
 }
 
-/**
-* total.cgi의 파라메터를 이용해 사이의 합을 리턴한다
-*
-* @param parm : total.cgi의 파라메터
-*/
-long long getSum(char *parm)
-{
-    long long l, r, temp;
-    sscanf(parm, "from=%lld&to=%lld", &l, &r);
-
-    return ((r * (r + 1)) / 2) - (((l - 1) * l) / 2);
-}
-
-void writeLog(char *ip, char *path, int len)
-{
-    pthread_mutex_lock(&m_lock); // mutex lock
-    sprintf(logdata, "%s %s %d\n", ip, path, len);
-    write(logfile, logdata, strlen(logdata));
-    pthread_mutex_unlock(&m_lock); // mutex unlock
-}
