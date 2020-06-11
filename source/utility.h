@@ -13,12 +13,21 @@
 
 /**
 * Http Requeest Header 구조체
+*
+* type : Http Request type
+* path : 요청 파일 경로
 */
-struct Header
+typedef struct header
 {
-    char type[10], path[256], version[20], host[100];
-};
+    char type[10], path[256];
+}Header;
 
+/**
+* Http Requeest Header 구조체
+*
+* sd : client의 소켓 디스크립터
+* ip : clinet ip
+*/
 typedef struct myClient
 {
     int sd;
@@ -42,29 +51,42 @@ char *getMIME(char *name);
 * Get 요청을 파싱하여 경로와 파라미터를 저장하는 GetRequest 구조체를 초기화한다
 *
 * @param path : 파일 경로
+* @param req : path를 파일경로와 파라미터로 분리한 결과를 저장할 변수
 */
 void parseGetRequest(char *path, GetRequest *req);
 
 /**
-* http request header 문자열로부터
+* http request 문자열로부터
 * Header 구조체를 생성한다
 *
-* @param header : http request header
-* @param hd : header
+* @param str : http request 문자열
+* @param hd : http request 문자열을 파싱한 결과를 저장할 변수
 */
-void parseHeader(char *header, struct Header *hd);
+void parseHeader(char *str, Header *hd);
 
 /**
-* total.cgi의 파라메터를 이용해 사이의 합을 리턴한다
+* total.cgi의 파라미터를 파싱하여 두 자연수 사이의 합을 리턴한다
 *
-* @param parm : total.cgi의 파라메터
+* @param parm : total.cgi의 파라미터
 */
 long long getSum(char *parm);
 
 /**
-* sd 에 파일의 data를 보낸다
+* client가 요청한 경로에 따라 결과를 리턴한다.
 *
-* @param filename : 파일명
+* @param path : 요청 경로
+* @param found : 요청 경로에 대해 탐색한 결과; return 참고
+* return
+0 : NOTFOUND
+1 : FOUND; found에 파일 경로 저장
+2 : cgi; found에 total.cgi의 파라미터 저장
+*/
+int findFile(char *path, char *found);
+
+/**
+* sd 에 filename data를 보낸다
+*
+* @param filename : 전송할 파일의 이름
 * @param sd : client socket descriptor
 */
 int sendFileData(char *filename, int sd);
@@ -73,8 +95,10 @@ int sendFileData(char *filename, int sd);
 * 로그를 작성한다
 *
 * @param fd : log를 작성할 파일의 디스크립터
+* @param ip : 클라이언트 ip
 * @param path : 전송한 파일명
 * @param len : 전송한 크기
+* @param lock : 뮤텍스 변수
 */
 void writeLog(int fd, char *ip, char *path, int len, pthread_mutex_t* lock);
 

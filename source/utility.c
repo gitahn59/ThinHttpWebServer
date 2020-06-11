@@ -37,10 +37,9 @@ void parseGetRequest(char *path, GetRequest *req)
     }
 }
 
-void parseHeader(char *header, struct Header *hd)
+void parseHeader(char *header, Header *hd)
 {
-    char temp[10];
-    sscanf(header, "%s %s %s %s %s", hd->type, hd->path, hd->version, temp, hd->host);
+    sscanf(header, "%s %s", hd->type, hd->path);
 }
 
 long long getSum(char *parm)
@@ -49,6 +48,56 @@ long long getSum(char *parm)
     sscanf(parm, "from=%lld&to=%lld", &l, &r);
 
     return ((r * (r + 1)) / 2) - (((l - 1) * l) / 2);
+}
+
+int findFile(char *path, char *found)
+{
+    struct stat buf; // 파일정보
+    int sended = 0;
+    GetRequest req;
+    char rst[100];
+    int idx;
+
+    parseGetRequest(path, &req); // 경로에서 파일경로와 parameter를 추출
+    // total.cgi 인 경우
+    if (strstr(req.path, "total.cgi") != NULL)
+    {
+        strcpy(found, req.parameters);
+        return 2;
+    }
+
+    // 파일명 조정
+    if (access(req.path, F_OK) != 0) // 파일이 존재하지 않으면
+    {
+        if (getMIME(req.path) == NULL) // 요청 경로가 디렉토리인 경우
+        {
+            //index.html로 설정
+            strcat(req.path, "/index.html");
+        }
+        else // 요청 경로가 파일인 경우
+        {
+            idx = strrchr(req.path, '/') - req.path;
+            // index.html로 파일명 교체
+            strcpy(req.path + idx + 1, "index.html");
+        }
+    }
+    else
+    {
+        stat(req.path, &buf);
+        if (S_ISDIR(buf.st_mode))            // 파일은 존재하지만 디렉토리인 경우
+            strcat(req.path, "/index.html"); // index.html로 설정
+    }
+
+    // 파일이 존재하면
+    if (access(req.path, F_OK) == 0)
+    {
+        strcpy(found, req.path);
+        return 1;
+    }
+    else
+    { // index.html도 존재 하지 않으면
+        return 0;
+    }
 }
 
 int sendFileData(char *filename, int sd)

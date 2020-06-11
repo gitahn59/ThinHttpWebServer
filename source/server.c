@@ -10,9 +10,19 @@
 #include <fcntl.h>
 #include <signal.h>
 #include "utility.h"
+#include "trie.h"
 
 #define MAXHTTPHEADSIZE 4096
 #define MAXCLIENTSIZE 50
+
+typedef struct myinfo
+{
+    int type;
+    char path[256];
+    char *mime;
+    char response_header[200];
+    int response_header_size;
+} Info;
 
 // mutex
 pthread_mutex_t m_lock;
@@ -34,7 +44,7 @@ void init(int argc, char **argv);
 *
 * @param sd : server socket 
 */
-void* accept_thread(void *sd);
+void *accept_thread(void *sd);
 
 /**
 * http request를 받으면 요청에 대한
@@ -43,6 +53,8 @@ void* accept_thread(void *sd);
 * @param arg : client number
 */
 void *response_thread(void *arg);
+
+void send_reserved_file(char *path, int num, Client c);
 
 /**
 * filename에 로직을 처리한다
@@ -65,9 +77,12 @@ int clientCnt = 0;
 int port;      // server port
 char dir[255]; // service directory
 int dirlen;    // len of dir
-int logfd; // log file descriptor
-const char* NOTFOUND = "HTTP/1.1 200 OK\r\nContent-Type: text/html \r\n\r\n <html><body>Not found</body></html>";
+int logfd;     // log file descriptor
+const char *NOTFOUND = "HTTP/1.1 200 OK\r\nContent-Type: text/html \r\n\r\n <html><body>Not found</body></html>";
 int NOTFOUNDLEN = 82;
+trie *t;
+int id;
+Info regist[10000];
 
 int main(int argc, char **argv)
 {
@@ -133,6 +148,9 @@ int main(int argc, char **argv)
         exit(1);
     }
 
+    t = makeTrie();
+    id = -1;
+
     while (1)
     {
         scanf("%s", str);
@@ -165,7 +183,8 @@ void init(int argc, char **argv)
     strcpy(dir, argv[1]);
     dirlen = strlen(dir);
     port = atoi(argv[2]);
-    if(port==0){
+    if (port == 0)
+    {
         // print 사용법
         printf("Unvalid Port number\n");
         printf("Usage : %s <service directory> <port>\n", argv[0]);
@@ -180,7 +199,7 @@ void init(int argc, char **argv)
     printf("================================\n\n");
 }
 
-void* accept_thread(void *sd)
+void *accept_thread(void *sd)
 {
     struct sockaddr_in cli; // server and client socket
     int clientlen = sizeof(cli);
@@ -223,26 +242,58 @@ void* accept_thread(void *sd)
 
 void *response_thread(void *nsd)
 {
-    struct Header hd;
-    strcpy(hd.type,"NONE");
+    Header hd;
     // num of client
     Client c = *(Client *)nsd;
-    char path[255];
-
+    int num, rst;
+    char path[256], found[256];
     char header[MAXHTTPHEADSIZE];
     int str_len; // length of request
+    int sended = 0;
+    char res[200];
 
     // Http Request 수신
     str_len = recv(c.sd, header, MAXHTTPHEADSIZE - 1, 0);
     header[str_len] = 0; // header 끝 표시
+    strcpy(hd.type, "NONE");
 
     // header 파싱
     parseHeader(header, &hd);
-    if(strcmp(hd.type, "GET")==0){
+    if (strcmp(hd.type, "GET") == 0)
+    {
         // 파일 경로 생성
         strcpy(path, dir);
         strcat(path, hd.path);
-        handleFileRequest(path, c);
+
+        //num = trie_find(t, path);
+        num = -1;
+        if (num >= 0)
+        {
+            send_reserved_file(path, num, c);
+        }
+        else
+        {
+            rst = findFile(path, found);
+            if (rst == 0)
+            {
+                sended += send(c.sd, NOTFOUND, NOTFOUNDLEN, 0);
+            }
+            else if (rst == 1)
+            {
+                // Http Response header 생성
+                sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: %s \r\n\r\n", getMIME(found));
+                // Http Response header 송신
+                sended += send(c.sd, res, strlen(res), 0);
+                // Http Response body 송신
+                sended += sendFileData(found, c.sd);
+            }
+            else if (rst == 2)
+            {
+                sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain \r\n\r\n%lld", getSum(found));
+                sended += send(c.sd, res, strlen(res), 0);
+            }
+            writeLog(logfd, c.ip, path, sended, &m_lock);
+        }
     }
 
     // close client descriptor
@@ -251,60 +302,19 @@ void *response_thread(void *nsd)
     free(nsd);
 }
 
-void handleFileRequest(char *path, Client c)
+void send_reserved_file(char *path, int num, Client c)
 {
-    struct stat buf; // 파일정보
     int sended = 0;
-    GetRequest req;
-    parseGetRequest(path, &req); // 경로를 파일경로와 parameter로 분리
-    char rst[100];
-    int idx;
-
-    // total.cgi 인 경우
-    if (strstr(req.path, "total.cgi") != NULL)
-    {
-        sprintf(rst, "HTTP/1.1 200 OK\r\nContent-Type: text/plain \r\n\r\n%lld", getSum(req.parameters));
-        sended += send(c.sd, rst, strlen(rst),0);
-        writeLog(logfd, c.ip, path, sended, &m_lock);
-        return;
-    }
-
-    // 파일명 조정
-    if (access(req.path, F_OK) != 0) // 존재하지 않으면
-    {
-        if (getMIME(req.path) == NULL)
-        { // 요청 경로가 디렉토리인 경우
-            // index.html로 설정
-            strcat(req.path, "/index.html");
-        }
-        else
-        { // 요청 경로가 파일인 경우
-            idx = strrchr(req.path, '/') - req.path;
-            strcpy(req.path + idx + 1, "index.html"); // 파일명 교체
-        }
-    }
-    else
-    { // 파일은 존재하지만 디렉토리인 경우
-        stat(req.path, &buf);
-        if (S_ISDIR(buf.st_mode))
-        {
-            strcat(req.path, "/index.html"); // index.html로 설정
-        }
-    }
-
-    // 파일이 존재하면
-    if (access(req.path, F_OK) == 0)
-    {
-        // Http Response header 생성
-        sprintf(rst, "HTTP/1.1 200 OK\r\nContent-Type: %s \r\n\r\n", getMIME(req.path));
+    if (regist[num].type == 1)
+    { // 파일이 있는 경우
         // Http Response header 송신
-        sended += send(c.sd, rst, strlen(rst),0);
+        sended += send(c.sd, regist[num].response_header, regist[num].response_header_size, 0);
         // Http Response body 송신
-        sended += sendFileData(req.path, c.sd);
+        sended += sendFileData(regist[num].path, c.sd);
         writeLog(logfd, c.ip, path, sended, &m_lock);
     }
-    else
-    { // index.html도 존재 하지 않으면
+    else if (regist[num].type == 2)
+    { // 파일이 없는 경우
         sended += send(c.sd, NOTFOUND, NOTFOUNDLEN, 0);
         writeLog(logfd, c.ip, path, sended, &m_lock);
     }
@@ -318,4 +328,3 @@ void error_handling(char *message)
     // exit
     exit(1);
 }
-
