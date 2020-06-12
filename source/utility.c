@@ -37,11 +37,6 @@ void parseGetRequest(char *path, GetRequest *req)
     }
 }
 
-void parseHeader(char *header, Header *hd)
-{
-    sscanf(header, "%s %s", hd->type, hd->path);
-}
-
 long long getSum(char *parm)
 {
     long long l, r, temp;

@@ -13,15 +13,13 @@
 #include "trie.h"
 
 #define MAXHTTPHEADSIZE 4096
-#define MAXCLIENTSIZE 50
+#define MAXCLIENTSIZE 200
 
 typedef struct myinfo
 {
-    int type;
+    int type, response_header_size, sended;
     char path[256];
-    char *mime;
     char response_header[200];
-    int response_header_size;
 } Info;
 
 // mutex
@@ -142,14 +140,15 @@ int main(int argc, char **argv)
         exit(1);
     }
 
+    t = makeTrie();
+    id = 0;
+    regist[0].type=0;
+
     if (pthread_create(&tid, NULL, accept_thread, (void *)&sock) < 0)
     {
         perror("thread create error");
         exit(1);
     }
-
-    t = makeTrie();
-    id = -1;
 
     while (1)
     {
@@ -220,16 +219,6 @@ void *accept_thread(void *sd)
         }
 
         c->ip = inet_ntoa(cli.sin_addr);
-        // create chat thread
-        while (1)
-        {
-            if (clientCnt < MAXCLIENTSIZE)
-            {
-                break;
-            }
-            else
-                sleep(10);
-        }
         if (pthread_create(&tid, NULL, response_thread, (void *)c) < 0)
         {
             perror("thread create error");
@@ -242,11 +231,11 @@ void *accept_thread(void *sd)
 
 void *response_thread(void *nsd)
 {
-    Header hd;
     // num of client
     Client c = *(Client *)nsd;
     int num, rst;
     char path[256], found[256];
+    char type[20], filename[256];
     char header[MAXHTTPHEADSIZE];
     int str_len; // length of request
     int sended = 0;
@@ -255,18 +244,17 @@ void *response_thread(void *nsd)
     // Http Request 수신
     str_len = recv(c.sd, header, MAXHTTPHEADSIZE - 1, 0);
     header[str_len] = 0; // header 끝 표시
-    strcpy(hd.type, "NONE");
-
+    strcpy(type, "NONE");
     // header 파싱
-    parseHeader(header, &hd);
-    if (strcmp(hd.type, "GET") == 0)
+    sscanf(header, "%s %s", type, filename);
+
+    if (strcmp(type, "GET") == 0)
     {
         // 파일 경로 생성
         strcpy(path, dir);
-        strcat(path, hd.path);
+        strcat(path, filename);
 
-        //num = trie_find(t, path);
-        num = -1;
+        num = trie_find(t, path);
         if (num >= 0)
         {
             send_reserved_file(path, num, c);
@@ -277,6 +265,9 @@ void *response_thread(void *nsd)
             if (rst == 0)
             {
                 sended += send(c.sd, NOTFOUND, NOTFOUNDLEN, 0);
+                pthread_mutex_lock(&m_lock);
+                trie_insert(t, 0, path);
+                pthread_mutex_unlock(&m_lock);
             }
             else if (rst == 1)
             {
@@ -286,12 +277,21 @@ void *response_thread(void *nsd)
                 sended += send(c.sd, res, strlen(res), 0);
                 // Http Response body 송신
                 sended += sendFileData(found, c.sd);
+                pthread_mutex_lock(&m_lock);
+                num = ++id;
+                regist[num].type=1;
+                strcpy(regist[num].path, found);
+                strcpy(regist[num].response_header, res);
+                regist[num].response_header_size = strlen(res);
+                regist[num].sended = sended;
+                trie_insert(t, num, path);
+                pthread_mutex_unlock(&m_lock);
             }
             else if (rst == 2)
             {
                 sprintf(res, "HTTP/1.1 200 OK\r\nContent-Type: text/plain \r\n\r\n%lld", getSum(found));
                 sended += send(c.sd, res, strlen(res), 0);
-            }
+            }        
             writeLog(logfd, c.ip, path, sended, &m_lock);
         }
     }
@@ -304,19 +304,17 @@ void *response_thread(void *nsd)
 
 void send_reserved_file(char *path, int num, Client c)
 {
-    int sended = 0;
-    if (regist[num].type == 1)
+    if (regist[num].type == 0)
+    { // 파일이 없는 경우
+        send(c.sd, NOTFOUND, NOTFOUNDLEN, 0);
+        writeLog(logfd, c.ip, path, NOTFOUNDLEN, &m_lock);
+    }else if (regist[num].type == 1)
     { // 파일이 있는 경우
         // Http Response header 송신
-        sended += send(c.sd, regist[num].response_header, regist[num].response_header_size, 0);
+        send(c.sd, regist[num].response_header, regist[num].response_header_size, 0);
         // Http Response body 송신
-        sended += sendFileData(regist[num].path, c.sd);
-        writeLog(logfd, c.ip, path, sended, &m_lock);
-    }
-    else if (regist[num].type == 2)
-    { // 파일이 없는 경우
-        sended += send(c.sd, NOTFOUND, NOTFOUNDLEN, 0);
-        writeLog(logfd, c.ip, path, sended, &m_lock);
+        sendFileData(regist[num].path, c.sd);
+        writeLog(logfd, c.ip, path, regist[num].sended, &m_lock);
     }
 }
 

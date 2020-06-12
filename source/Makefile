@@ -16,4 +16,4 @@ trie.o: trie.c trie.h
 	$(CC) $(CFLAGS) -c trie.c
 
 clean:
-	rm -f *~ $(APP).o $(APP) utility.o trie.o log.txt 
+	rm -f *~ $(APP) server.o utility.o trie.o log.txt 

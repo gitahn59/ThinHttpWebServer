@@ -14,17 +14,6 @@
 /**
 * Http Requeest Header 구조체
 *
-* type : Http Request type
-* path : 요청 파일 경로
-*/
-typedef struct header
-{
-    char type[10], path[256];
-}Header;
-
-/**
-* Http Requeest Header 구조체
-*
 * sd : client의 소켓 디스크립터
 * ip : clinet ip
 */
@@ -34,6 +23,12 @@ typedef struct myClient
     char *ip;
 } Client;
 
+/**
+* Http Requeest Header 구조체
+*
+* path : client가 요청한 파일 경로
+* parameters : client가 요청한 파라미터
+*/
 typedef struct getRequest
 {
     char path[256], parameters[256];
@@ -56,15 +51,6 @@ char *getMIME(char *name);
 void parseGetRequest(char *path, GetRequest *req);
 
 /**
-* http request 문자열로부터
-* Header 구조체를 생성한다
-*
-* @param str : http request 문자열
-* @param hd : http request 문자열을 파싱한 결과를 저장할 변수
-*/
-void parseHeader(char *str, Header *hd);
-
-/**
 * total.cgi의 파라미터를 파싱하여 두 자연수 사이의 합을 리턴한다
 *
 * @param parm : total.cgi의 파라미터
@@ -76,6 +62,7 @@ long long getSum(char *parm);
 *
 * @param path : 요청 경로
 * @param found : 요청 경로에 대해 탐색한 결과; return 참고
+*
 * return
 0 : NOTFOUND
 1 : FOUND; found에 파일 경로 저장
