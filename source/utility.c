@@ -3,13 +3,15 @@
 char *getMIME(char *name)
 {
     char *MIME[5][2] = {
-    {".html", "text/html"},
-    {".htm", "text/html"},
-    {".gif", "image/gif"},
-    {".jpg", "image/jpeg"},
-    {".gif", "image/gif"}};
+        {".html", "text/html"},
+        {".htm", "text/html"},
+        {".gif", "image/gif"},
+        {".jpg", "image/jpeg"},
+        {".gif", "image/gif"},
+    };
 
     int i;
+    //해당되는 MIME가 있으면 리턴
     for (i = 0; i < 5; i++)
     {
         if (strstr(name, MIME[i][0]))
@@ -39,10 +41,10 @@ void parseGetRequest(char *path, GetRequest *req)
 
 long long getSum(char *parm)
 {
-    long long l, r, temp;
-    sscanf(parm, "from=%lld&to=%lld", &l, &r);
+    long long l, r;
+    sscanf(parm, "from=%lld&to=%lld", &l, &r); // 자연수 추출
 
-    return ((r * (r + 1)) / 2) - (((l - 1) * l) / 2);
+    return ((r * (r + 1)) / 2) - (((l - 1) * l) / 2); // 등차수열의 합을 이용한 합 계산
 }
 
 int findFile(char *path, char *found)
@@ -64,23 +66,15 @@ int findFile(char *path, char *found)
     // 파일명 조정
     if (access(req.path, F_OK) != 0) // 파일이 존재하지 않으면
     {
-        if (getMIME(req.path) == NULL) // 요청 경로가 디렉토리인 경우
-        {
-            //index.html로 설정
-            strcat(req.path, "/index.html");
-        }
-        else // 요청 경로가 파일인 경우
-        {
-            idx = strrchr(req.path, '/') - req.path;
-            // index.html로 파일명 교체
-            strcpy(req.path + idx + 1, "index.html");
-        }
+        idx = strrchr(req.path, '/') - req.path;
+        // index.html로 파일명 교체
+        strcpy(req.path + idx + 1, "index.html");
     }
-    else
+    else // 파일이 존재하지만
     {
         stat(req.path, &buf);
-        if (S_ISDIR(buf.st_mode))            // 파일은 존재하지만 디렉토리인 경우
-            strcat(req.path, "/index.html"); // index.html로 설정
+        if (S_ISDIR(buf.st_mode))            // 디렉토리인 경우
+            strcat(req.path, "/index.html"); // 디렉토리 아래 index.html 탐색을 위해 추가
     }
 
     // 파일이 존재하면
@@ -123,7 +117,7 @@ int sendFileData(char *filename, int sd)
     return sended;
 }
 
-void writeLog(int fd, char *ip, char *path, int len, pthread_mutex_t* lock)
+void writeLog(int fd, char *ip, char *path, int len, pthread_mutex_t *lock)
 {
     char logdata[200];
     pthread_mutex_lock(lock); // mutex lock

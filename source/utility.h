@@ -34,7 +34,6 @@ typedef struct getRequest
     char path[256], parameters[256];
 } GetRequest;
 
-
 /**
 * 파일 이름에 맞는 MIME를 리턴한다
 *
@@ -87,6 +86,6 @@ int sendFileData(char *filename, int sd);
 * @param len : 전송한 크기
 * @param lock : 뮤텍스 변수
 */
-void writeLog(int fd, char *ip, char *path, int len, pthread_mutex_t* lock);
+void writeLog(int fd, char *ip, char *path, int len, pthread_mutex_t *lock);
 
 #endif
